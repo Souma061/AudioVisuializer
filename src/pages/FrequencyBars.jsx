@@ -88,71 +88,126 @@ const AudioVisualizer = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [inputMode, setInputMode] = useState('file'); // 'file' or 'mic'
   const [fileName, setFileName] = useState(null);
+  const [isMicActive, setIsMicActive] = useState(false);
 
   const audioContextRef = useRef(null);
   const audioElementRef = useRef(null);
+  const mediaStreamRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // --- Audio Cleanup on Unmount ---
+  // --- Cleanup Logic ---
+  const cleanupAudio = () => {
+    setIsPlaying(false);
+    setIsMicActive(false);
+
+    // Stop File Audio
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      if (audioElementRef.current.src.startsWith('blob:')) {
+        URL.revokeObjectURL(audioElementRef.current.src);
+      }
+      audioElementRef.current = null;
+    }
+
+    // Stop Microphone Stream
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    // Close Context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+  };
+
+  // --- Cleanup on Unmount ---
   useEffect(() => {
     return () => {
-      audioContextRef.current?.close();
-      if (audioElementRef.current) {
-        audioElementRef.current.pause();
-        audioElementRef.current.src = '';
-      }
+      cleanupAudio();
     };
   }, []);
 
-  // --- File Handling ---
-  const handleFileChange = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    // Reset State
-    setFileName(file.name.replace(/\.[^/.]+$/, "")); // Remove extension
-    setIsPlaying(false);
-
-    // Cleanup old audio
-    if (audioContextRef.current) audioContextRef.current.close();
-    if (audioElementRef.current) {
-      audioElementRef.current.pause();
-      URL.revokeObjectURL(audioElementRef.current.src);
-    }
-
-    // Init Audio Context
+  // --- Initialize Audio Context ---
+  const initAudioContext = () => {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioContext();
     audioContextRef.current = audioCtx;
 
     const newAnalyzer = audioCtx.createAnalyser();
-    newAnalyzer.fftSize = 256; // Smaller FFT size = chunkier bars, larger = smoother
+    newAnalyzer.fftSize = 256;
+    newAnalyzer.smoothingTimeConstant = 0.8; // Smooths the bars
     setAnalyzer(newAnalyzer);
 
-    // Init Audio Element
+    return { audioCtx, newAnalyzer };
+  };
+
+  // --- Handle File Input ---
+  const handleFileChange = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    cleanupAudio();
+    const { audioCtx, newAnalyzer } = initAudioContext();
+
+    setFileName(file.name.replace(/\.[^/.]+$/, ""));
+    setInputMode('file');
+
     const audioUrl = URL.createObjectURL(file);
     const audio = new Audio(audioUrl);
     audioElementRef.current = audio;
 
-    // Event Listeners
-    audio.addEventListener('loadedmetadata', () => setDuration(audio.duration));
+    audio.addEventListener('loadedmetadata', () => {
+      setDuration(audio.duration);
+      audio.play().then(() => setIsPlaying(true)).catch(console.error);
+    });
+
     audio.addEventListener('timeupdate', () => setCurrentTime(audio.currentTime));
     audio.addEventListener('ended', () => setIsPlaying(false));
 
-    // Connect Nodes
+    // Connect: Source -> Analyzer -> Speakers
     const source = audioCtx.createMediaElementSource(audio);
     source.connect(newAnalyzer);
     newAnalyzer.connect(audioCtx.destination);
+  };
 
-    // Play
-    audio.play()
-      .then(() => setIsPlaying(true))
-      .catch(e => console.error("Playback failed:", e));
+  // --- Handle Microphone Input ---
+  const handleMicInput = async () => {
+    try {
+      cleanupAudio();
+      setFileName("Live Microphone Input");
+      setInputMode('mic');
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      mediaStreamRef.current = stream;
+      setIsMicActive(true);
+
+      const { audioCtx, newAnalyzer } = initAudioContext();
+
+      // Connect: Mic -> Analyzer (NOT to speakers, to avoid feedback)
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(newAnalyzer);
+
+      // We don't connect to destination, so no feedback loop!
+
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone access denied. Please check permission.");
+    }
   };
 
   // --- Controls ---
   const togglePlay = () => {
+    if (inputMode === 'mic') {
+      // Toggle mic on/off by re-running or cleaning up
+      if (isMicActive) cleanupAudio();
+      else handleMicInput();
+      return;
+    }
+
     if (!audioElementRef.current) return;
     if (audioContextRef.current?.state === 'suspended') audioContextRef.current.resume();
 
@@ -165,6 +220,7 @@ const AudioVisualizer = () => {
   };
 
   const handleSeek = (e) => {
+    if (inputMode === 'mic') return;
     const newTime = Number(e.target.value);
     if (!audioElementRef.current) return;
     audioElementRef.current.currentTime = newTime;
@@ -178,64 +234,67 @@ const AudioVisualizer = () => {
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-8">
 
         {/* Header */}
-        <header className="flex justify-between items-center pointer-events-auto">
+        <header className="flex justify-between items-start pointer-events-auto">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-600 animate-pulse" />
+            <div className={`w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-600 ${isPlaying || isMicActive ? 'animate-pulse' : ''}`} />
             <div>
               <h1 className="text-xl font-bold tracking-tight">SONIC WAVES</h1>
               <p className="text-xs text-white/50 tracking-wider uppercase">Audio Environment</p>
             </div>
           </div>
 
-          {/* Upload Button */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="group relative px-6 py-2.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-all overflow-hidden"
-          >
-            <span className="relative z-10 text-sm font-medium group-hover:text-cyan-300 transition-colors">
-              {fileName ? 'Open File' : 'Start Listening'}
-            </span>
-            {/* Hover Effect */}
-            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/0 via-cyan-500/10 to-cyan-500/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            onChange={handleFileChange}
-            className="hidden"
-          />
+          {/* Input Controls */}
+          <div className="flex gap-4">
+            {/* Upload Button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 backdrop-blur-md transition-all text-sm font-medium flex items-center gap-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+              Upload File
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+
+            {/* Mic Button */}
+            <button
+              onClick={handleMicInput}
+              className={`px-5 py-2 rounded-full border backdrop-blur-md transition-all text-sm font-medium flex items-center gap-2 ${isMicActive ? 'bg-red-500/20 border-red-500 text-red-300' : 'bg-white/10 hover:bg-white/20 border-white/10'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
+              {isMicActive ? 'Mic Active' : 'Use Mic'}
+            </button>
+          </div>
         </header>
 
-        {/* Center Welcome Message (Only when idle) */}
-        {!fileName && (
+        {/* Center Welcome Message */}
+        {!analyzer && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-auto">
             <h2 className="text-5xl md:text-7xl font-light tracking-tighter mb-6 bg-gradient-to-b from-white to-white/20 bg-clip-text text-transparent">
               Feel the <br /> <span className="font-bold">Music</span>
             </h2>
             <p className="text-lg text-white/40 mb-8 max-w-md mx-auto">
-              Upload a track to generate a real-time 3D audio landscape.
+              Play music from a file or use your microphone to generate <br /> a real-time 3D audio landscape.
             </p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-8 py-3 bg-white text-black rounded-full font-bold hover:scale-105 active:scale-95 transition-transform"
-            >
-              Choose Track
-            </button>
           </div>
         )}
 
         {/* Player Bar (Only when active) */}
-        <div className={`transition-all duration-500 transform ${fileName ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0'}`}>
+        <div className={`transition-all duration-500 transform ${analyzer ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0'}`}>
           <div className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-4 md:p-6 pointer-events-auto max-w-4xl mx-auto flex items-center gap-6">
 
-            {/* Play Button */}
+            {/* Play/Stop Button */}
             <button
               onClick={togglePlay}
-              className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full flex items-center justify-center text-black hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)]"
+              className={`w-12 h-12 flex-shrink-0 rounded-full flex items-center justify-center text-black hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] ${isMicActive ? 'bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}
             >
-              {isPlaying ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+              {isPlaying || isMicActive ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
               ) : (
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
               )}
@@ -245,29 +304,38 @@ const AudioVisualizer = () => {
             <div className="flex-1 min-w-0">
               <div className="flex justify-between items-end mb-2">
                 <div className="truncate pr-4">
-                  <h3 className="text-white font-medium truncate">{fileName}</h3>
-                  <p className="text-xs text-cyan-400">Now Playing</p>
+                  <h3 className="text-white font-medium truncate">{fileName || "Unknown Track"}</h3>
+                  <p className="text-xs text-cyan-400">{isMicActive ? 'Live Input' : 'Now Playing'}</p>
                 </div>
-                <div className="text-xs font-mono text-white/50 shrink-0">
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </div>
+                {!isMicActive && (
+                  <div className="text-xs font-mono text-white/50 shrink-0">
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </div>
+                )}
               </div>
 
-              {/* Seeker */}
-              <div className="relative h-1.5 bg-white/10 rounded-full group cursor-pointer">
-                <input
-                  type="range"
-                  min="0"
-                  max={duration || 0}
-                  value={currentTime || 0}
-                  onChange={handleSeek}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                />
-                <div
-                  className="absolute top-0 left-0 h-full bg-cyan-400 rounded-full transition-all group-hover:bg-cyan-300"
-                  style={{ width: `${(currentTime / duration) * 100}%` }}
-                />
-              </div>
+              {/* Seeker (Only for Files) */}
+              {!isMicActive ? (
+                <div className="relative h-1.5 bg-white/10 rounded-full group cursor-pointer">
+                  <input
+                    type="range"
+                    min="0"
+                    max={duration || 0}
+                    value={currentTime || 0}
+                    onChange={handleSeek}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  <div
+                    className="absolute top-0 left-0 h-full bg-cyan-400 rounded-full transition-all group-hover:bg-cyan-300"
+                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                  />
+                </div>
+              ) : (
+                // Mic Visualizer Line
+                <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden relative">
+                  <div className="absolute inset-0 bg-red-500/50 animate-pulse" style={{ width: '100%' }} />
+                </div>
+              )}
             </div>
 
           </div>
@@ -289,7 +357,6 @@ const AudioVisualizer = () => {
 
           {analyzer && <FrequencyBars analyzer={analyzer} />}
 
-          {/* If no music, show a floating decorative object */}
           {!analyzer && (
             <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
               <mesh rotation={[Math.PI / 4, Math.PI / 4, 0]}>
@@ -309,7 +376,7 @@ const AudioVisualizer = () => {
             enableZoom={false}
             maxPolarAngle={Math.PI / 2}
             minPolarAngle={Math.PI / 3}
-            autoRotate={!isPlaying || !fileName}
+            autoRotate={!isPlaying && !isMicActive}
             autoRotateSpeed={0.5}
           />
         </Canvas>
