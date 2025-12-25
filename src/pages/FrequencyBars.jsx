@@ -15,16 +15,22 @@ const formatTime = (seconds) => {
 // --- Component: Responsive Camera Adjustment ---
 const ResponsiveCamera = () => {
   const { camera, size } = useThree();
+  const isMobileRef = useRef(size.width < 768);
+
   useEffect(() => {
     const isMobile = size.width < 768;
-    // Move camera back on mobile to keep items in view
-    const targetZ = isMobile ? 60 : 35;
-    const targetY = isMobile ? 30 : 20;
 
-    // Smoothly interpolate if needed, but direct set is fine for resize
-    camera.position.set(0, targetY, targetZ);
-    camera.updateProjectionMatrix();
-  }, [size, camera]);
+    // Only update if crossing the breakpoint to prevent snapping active user adjustments
+    if (isMobile !== isMobileRef.current) {
+      isMobileRef.current = isMobile;
+      const targetZ = isMobile ? 60 : 35;
+      const targetY = isMobile ? 30 : 20;
+
+      camera.position.set(0, targetY, targetZ);
+      camera.updateProjectionMatrix();
+    }
+  }, [size.width, camera]); // Only depend on width changing
+
   return null;
 };
 
@@ -32,6 +38,7 @@ const ResponsiveCamera = () => {
 const BarVisualizer = ({ analyzer }) => {
   const barsRef = useRef([]);
   const circleRef = useRef();
+  const hoveredIndexRef = useRef(null); // Ref for performance, avoids re-renders
 
   // Configuration
   const barCount = 64;
@@ -43,7 +50,8 @@ const BarVisualizer = ({ analyzer }) => {
     const dataArray = new Uint8Array(analyzer.frequencyBinCount);
     analyzer.getByteFrequencyData(dataArray);
 
-    // Rotate the entire ring slowly
+    // Rotate the entire ring slowly (only if not hovering significantly?)
+    // Keeping rotation adds life, but we can slow it if desired.
     if (circleRef.current) {
       circleRef.current.rotation.y -= 0.002;
     }
@@ -52,24 +60,35 @@ const BarVisualizer = ({ analyzer }) => {
       if (!bar) return;
 
       // Map audio data to scale
-      // We focus on the lower-mid frequencies for better visual impact
       const index = Math.floor((i / barCount) * (dataArray.length / 2));
       const frequencyValue = dataArray[index];
 
-      const targetScale = Math.max(0.4, (frequencyValue / 255) * 8); // Scale between 0.4 and 8
+      // Base Audio Scale
+      let targetScale = Math.max(0.4, (frequencyValue / 255) * 8);
 
-      // Smooth interpolation for height
+      // --- Interactive Logic ---
+      // If hovered, boost significantly.
+      // If close to hovered (optional spread), could boost too.
+      if (hoveredIndexRef.current === i) {
+        targetScale = Math.max(targetScale, 12); // Boost height on hover
+      }
+
+      // Smooth interpolation for height (Lerp)
+      // Increasing lerp factor for interaction helps it feel responsive but smooth
       bar.scale.y = THREE.MathUtils.lerp(bar.scale.y, targetScale, 0.15);
 
-      // Dynamic Color calculation based on height and position
-      // hue moves from cyan (0.5) to purple (0.8) based on intensity
-      const hue = 0.5 + (frequencyValue / 255) * 0.4;
-      const lightness = 0.3 + (frequencyValue / 255) * 0.4;
+      // Color Calculation
+      const isHovered = hoveredIndexRef.current === i;
+      let hue = 0.5 + (frequencyValue / 255) * 0.4;
+      let lightness = 0.3 + (frequencyValue / 255) * 0.4;
+
+      if (isHovered) {
+        hue = 0.6; // Cyan-ish
+        lightness = 1.0; // White hot
+      }
 
       bar.material.color.setHSL(hue, 0.9, lightness);
-      bar.material.color.setHSL(hue, 0.9, lightness);
-      bar.material.color.setHSL(hue, 0.9, lightness);
-      bar.material.emissive.setHSL(hue, 0.8, 0.5); // Reduced intensity
+      bar.material.emissive.setHSL(hue, isHovered ? 1.0 : 0.8, isHovered ? 0.8 : 0.5);
     });
   });
 
@@ -86,6 +105,8 @@ const BarVisualizer = ({ analyzer }) => {
             position={[x, 0, z]}
             rotation={[0, -angle, 0]}
             ref={(el) => (barsRef.current[i] = el)}
+            onPointerOver={(e) => { e.stopPropagation(); hoveredIndexRef.current = i; }}
+            onPointerOut={() => { hoveredIndexRef.current = null; }}
           >
             {/* Slimmer bars for a more refined look */}
             <boxGeometry args={[0.3, 1, 0.3]} />
@@ -107,41 +128,43 @@ const BarVisualizer = ({ analyzer }) => {
 const SphereVisualizer = ({ analyzer }) => {
   const meshRef = useRef();
 
+  // Interactive hover state
+  const isHoveredRef = useRef(false);
+
   useFrame((state) => {
     if (!analyzer || !meshRef.current) return;
 
-    // Use frequency data for bass reactive scaling
     const dataArray = new Uint8Array(analyzer.frequencyBinCount);
     analyzer.getByteFrequencyData(dataArray);
 
-    // Average lower frequencies for bass kick
     const range = 16;
     let sum = 0;
     for (let i = 0; i < range; i++) sum += dataArray[i];
     const average = sum / range;
 
-    // Scale effect
-    const scale = 1 + (average / 255) * 2.5;
+    const scaleBase = 1 + (average / 255) * 2.5;
+    const targetScale = isHoveredRef.current ? scaleBase * 1.5 : scaleBase;
 
-    // Lerp for smoothness
-    meshRef.current.scale.x = THREE.MathUtils.lerp(meshRef.current.scale.x, scale, 0.2);
-    meshRef.current.scale.y = THREE.MathUtils.lerp(meshRef.current.scale.y, scale, 0.2);
-    meshRef.current.scale.z = THREE.MathUtils.lerp(meshRef.current.scale.z, scale, 0.2);
+    meshRef.current.scale.x = THREE.MathUtils.lerp(meshRef.current.scale.x, targetScale, 0.2);
+    meshRef.current.scale.y = THREE.MathUtils.lerp(meshRef.current.scale.y, targetScale, 0.2);
+    meshRef.current.scale.z = THREE.MathUtils.lerp(meshRef.current.scale.z, targetScale, 0.2);
 
-    // Rotation
     meshRef.current.rotation.x += 0.005;
     meshRef.current.rotation.y += 0.005;
 
-    // Color Pulse
     const hue = (state.clock.elapsedTime * 0.05) % 1;
-    meshRef.current.material.color.setHSL(hue, 0.7, 0.5);
-    meshRef.current.material.color.setHSL(hue, 0.7, 0.5);
+    const lightness = isHoveredRef.current ? 0.8 : 0.5;
+
+    meshRef.current.material.color.setHSL(hue, 0.7, lightness);
     meshRef.current.material.emissive.setHSL(hue, 0.8, 0.5 + (average / 255) * 0.5);
-    meshRef.current.material.wireframe = true;
   });
 
   return (
-    <mesh ref={meshRef}>
+    <mesh
+      ref={meshRef}
+      onPointerOver={() => isHoveredRef.current = true}
+      onPointerOut={() => isHoveredRef.current = false}
+    >
       <icosahedronGeometry args={[4, 5]} />
       <meshStandardMaterial
         color="#ffffff"
@@ -160,9 +183,8 @@ const WaveVisualizer = ({ analyzer }) => {
   const groupRef = useRef();
   const count = 128; // Number of particles
   const radius = 10;
-
-  // We use a list handling approach for refs since hooks can't render variable loops easily without stable keys
   const particlesRef = useRef([]);
+  const hoveredIndexRef = useRef(null);
 
   useFrame(() => {
     if (!analyzer) return;
@@ -175,7 +197,12 @@ const WaveVisualizer = ({ analyzer }) => {
       // Map time domain (0-255) centered at 128
       const index = Math.floor((i / count) * dataArray.length);
       const value = dataArray[index];
-      const displacement = ((value - 128) / 128) * 6; // Amplitude
+      let displacement = ((value - 128) / 128) * 6; // Amplitude
+
+      // Interaction
+      if (hoveredIndexRef.current === i) {
+        displacement += 5; // Pop up
+      }
 
       const angle = (i / count) * Math.PI * 2;
       // Radius changes with audio
@@ -188,8 +215,10 @@ const WaveVisualizer = ({ analyzer }) => {
 
       // Color logic
       const intensity = Math.abs(displacement) / 4;
-      mesh.material.color.setHSL(0.6 + intensity, 1.0, 0.5);
-      mesh.scale.setScalar(0.2 + intensity);
+      const isHovered = hoveredIndexRef.current === i;
+
+      mesh.material.color.setHSL(0.6 + intensity, 1.0, isHovered ? 1.0 : 0.5);
+      mesh.scale.setScalar(isHovered ? 0.4 + intensity : 0.2 + intensity);
       mesh.material.emissive.setHSL(0.6 + intensity, 0.8, 0.5);
     });
 
@@ -205,6 +234,8 @@ const WaveVisualizer = ({ analyzer }) => {
           key={i}
           ref={el => particlesRef.current[i] = el}
           position={[Math.cos((i / count) * Math.PI * 2) * radius, 0, Math.sin((i / count) * Math.PI * 2) * radius]}
+          onPointerOver={(e) => { e.stopPropagation(); hoveredIndexRef.current = i; }}
+          onPointerOut={() => hoveredIndexRef.current = null}
         >
           <sphereGeometry args={[0.2, 8, 8]} />
           <meshStandardMaterial
@@ -224,6 +255,7 @@ const WaveVisualizer = ({ analyzer }) => {
 const LinearBarVisualizer = ({ analyzer }) => {
   const barsRef = useRef([]);
   const groupRef = useRef();
+  const hoveredIndexRef = useRef(null);
 
   // Configuration
   const barCount = 48; // Fewer bars than circular for cleaner simplified look
@@ -245,7 +277,13 @@ const LinearBarVisualizer = ({ analyzer }) => {
       const frequencyValue = dataArray[index];
 
       // Scale height
-      const targetHeight = Math.max(0.2, (frequencyValue / 255) * 14);
+      let targetHeight = Math.max(0.2, (frequencyValue / 255) * 14);
+
+      // Interaction
+      if (hoveredIndexRef.current === i) {
+        targetHeight = Math.max(targetHeight, 15);
+      }
+
       bar.scale.y = THREE.MathUtils.lerp(bar.scale.y, targetHeight, 0.2);
 
       // Position: Move up so it grows from bottom
@@ -253,7 +291,7 @@ const LinearBarVisualizer = ({ analyzer }) => {
 
       // ColorGradient: Low=Blue, Mid=Cyan, High=White
       const hue = 0.6 - (frequencyValue / 255) * 0.15; // 0.6(Blue) -> 0.45(Cyan)
-      const lightness = 0.4 + (frequencyValue / 255) * 0.6; // Get brighter
+      const lightness = hoveredIndexRef.current === i ? 1.0 : 0.4 + (frequencyValue / 255) * 0.6; // Get brighter
 
       bar.material.color.setHSL(hue, 0.9, lightness);
       bar.material.color.setHSL(hue, 0.9, lightness);
@@ -268,6 +306,8 @@ const LinearBarVisualizer = ({ analyzer }) => {
           key={i}
           position={[i * spacing, 0, 0]}
           ref={(el) => (barsRef.current[i] = el)}
+          onPointerOver={(e) => { e.stopPropagation(); hoveredIndexRef.current = i; }}
+          onPointerOut={() => hoveredIndexRef.current = null}
         >
           <boxGeometry args={[0.8, 1, 0.8]} />
           <meshStandardMaterial
