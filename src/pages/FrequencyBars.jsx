@@ -1,5 +1,6 @@
 import { Float, OrbitControls, Stars } from '@react-three/drei';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
@@ -11,8 +12,24 @@ const formatTime = (seconds) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-// --- Component: 3D Frequency Bars ---
-const FrequencyBars = ({ analyzer }) => {
+// --- Component: Responsive Camera Adjustment ---
+const ResponsiveCamera = () => {
+  const { camera, size } = useThree();
+  useEffect(() => {
+    const isMobile = size.width < 768;
+    // Move camera back on mobile to keep items in view
+    const targetZ = isMobile ? 60 : 35;
+    const targetY = isMobile ? 30 : 20;
+
+    // Smoothly interpolate if needed, but direct set is fine for resize
+    camera.position.set(0, targetY, targetZ);
+    camera.updateProjectionMatrix();
+  }, [size, camera]);
+  return null;
+};
+
+// --- Component: Bar Visualizer (Original) ---
+const BarVisualizer = ({ analyzer }) => {
   const barsRef = useRef([]);
   const circleRef = useRef();
 
@@ -50,7 +67,9 @@ const FrequencyBars = ({ analyzer }) => {
       const lightness = 0.3 + (frequencyValue / 255) * 0.4;
 
       bar.material.color.setHSL(hue, 0.9, lightness);
-      bar.material.emissive.setHSL(hue, 1, 0.2);
+      bar.material.color.setHSL(hue, 0.9, lightness);
+      bar.material.color.setHSL(hue, 0.9, lightness);
+      bar.material.emissive.setHSL(hue, 0.8, 0.5); // Reduced intensity
     });
   });
 
@@ -74,10 +93,193 @@ const FrequencyBars = ({ analyzer }) => {
               color="cyan"
               roughness={0.2}
               metalness={0.8}
+              toneMapped={false}
+              emissiveIntensity={1}
             />
           </mesh>
         );
       })}
+    </group>
+  );
+};
+
+// --- Component: Sphere Visualizer (Pulsing Mesh) ---
+const SphereVisualizer = ({ analyzer }) => {
+  const meshRef = useRef();
+
+  useFrame((state) => {
+    if (!analyzer || !meshRef.current) return;
+
+    // Use frequency data for bass reactive scaling
+    const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+    analyzer.getByteFrequencyData(dataArray);
+
+    // Average lower frequencies for bass kick
+    const range = 16;
+    let sum = 0;
+    for (let i = 0; i < range; i++) sum += dataArray[i];
+    const average = sum / range;
+
+    // Scale effect
+    const scale = 1 + (average / 255) * 2.5;
+
+    // Lerp for smoothness
+    meshRef.current.scale.x = THREE.MathUtils.lerp(meshRef.current.scale.x, scale, 0.2);
+    meshRef.current.scale.y = THREE.MathUtils.lerp(meshRef.current.scale.y, scale, 0.2);
+    meshRef.current.scale.z = THREE.MathUtils.lerp(meshRef.current.scale.z, scale, 0.2);
+
+    // Rotation
+    meshRef.current.rotation.x += 0.005;
+    meshRef.current.rotation.y += 0.005;
+
+    // Color Pulse
+    const hue = (state.clock.elapsedTime * 0.05) % 1;
+    meshRef.current.material.color.setHSL(hue, 0.7, 0.5);
+    meshRef.current.material.color.setHSL(hue, 0.7, 0.5);
+    meshRef.current.material.emissive.setHSL(hue, 0.8, 0.5 + (average / 255) * 0.5);
+    meshRef.current.material.wireframe = true;
+  });
+
+  return (
+    <mesh ref={meshRef}>
+      <icosahedronGeometry args={[4, 5]} />
+      <meshStandardMaterial
+        color="#ffffff"
+        wireframe
+        transparent
+        opacity={0.8}
+        toneMapped={false}
+        emissiveIntensity={1}
+      />
+    </mesh>
+  );
+};
+
+// --- Component: Wave Visualizer (Circular Time Domain) ---
+const WaveVisualizer = ({ analyzer }) => {
+  const groupRef = useRef();
+  const count = 128; // Number of particles
+  const radius = 10;
+
+  // We use a list handling approach for refs since hooks can't render variable loops easily without stable keys
+  const particlesRef = useRef([]);
+
+  useFrame(() => {
+    if (!analyzer) return;
+    const dataArray = new Uint8Array(analyzer.fftSize);
+    analyzer.getByteTimeDomainData(dataArray); // Time domain for waveform
+
+    particlesRef.current.forEach((mesh, i) => {
+      if (!mesh) return;
+
+      // Map time domain (0-255) centered at 128
+      const index = Math.floor((i / count) * dataArray.length);
+      const value = dataArray[index];
+      const displacement = ((value - 128) / 128) * 6; // Amplitude
+
+      const angle = (i / count) * Math.PI * 2;
+      // Radius changes with audio
+      const r = radius + displacement;
+
+      mesh.position.x = Math.cos(angle) * r;
+      mesh.position.z = Math.sin(angle) * r;
+      // Also oscillate Y specifically for wave look
+      mesh.position.y = displacement * 1.5;
+
+      // Color logic
+      const intensity = Math.abs(displacement) / 4;
+      mesh.material.color.setHSL(0.6 + intensity, 1.0, 0.5);
+      mesh.scale.setScalar(0.2 + intensity);
+      mesh.material.emissive.setHSL(0.6 + intensity, 0.8, 0.5);
+    });
+
+    if (groupRef.current) {
+      groupRef.current.rotation.y += 0.002;
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      {[...Array(count)].map((_, i) => (
+        <mesh
+          key={i}
+          ref={el => particlesRef.current[i] = el}
+          position={[Math.cos((i / count) * Math.PI * 2) * radius, 0, Math.sin((i / count) * Math.PI * 2) * radius]}
+        >
+          <sphereGeometry args={[0.2, 8, 8]} />
+          <meshStandardMaterial
+            color="#00ffff"
+            emissive="#00ffff"
+            emissiveIntensity={1.5}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+
+// --- Component: Linear Bar Visualizer (Classic) ---
+const LinearBarVisualizer = ({ analyzer }) => {
+  const barsRef = useRef([]);
+  const groupRef = useRef();
+
+  // Configuration
+  const barCount = 48; // Fewer bars than circular for cleaner simplified look
+  const spacing = 1.2;
+  const totalWidth = barCount * spacing;
+
+  useFrame(() => {
+    if (!analyzer) return;
+
+    const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+    analyzer.getByteFrequencyData(dataArray);
+
+    barsRef.current.forEach((bar, i) => {
+      if (!bar) return;
+
+      // Linear mapping
+      // We skip the very high frequencies which are often empty
+      const index = Math.floor((i / barCount) * (dataArray.length * 0.8));
+      const frequencyValue = dataArray[index];
+
+      // Scale height
+      const targetHeight = Math.max(0.2, (frequencyValue / 255) * 14);
+      bar.scale.y = THREE.MathUtils.lerp(bar.scale.y, targetHeight, 0.2);
+
+      // Position: Move up so it grows from bottom
+      bar.position.y = bar.scale.y / 2;
+
+      // ColorGradient: Low=Blue, Mid=Cyan, High=White
+      const hue = 0.6 - (frequencyValue / 255) * 0.15; // 0.6(Blue) -> 0.45(Cyan)
+      const lightness = 0.4 + (frequencyValue / 255) * 0.6; // Get brighter
+
+      bar.material.color.setHSL(hue, 0.9, lightness);
+      bar.material.color.setHSL(hue, 0.9, lightness);
+      bar.material.emissive.setHSL(hue, 0.8, 0.5);
+    });
+  });
+
+  return (
+    <group ref={groupRef} position={[-totalWidth / 2, -6, 0]}>
+      {[...Array(barCount)].map((_, i) => (
+        <mesh
+          key={i}
+          position={[i * spacing, 0, 0]}
+          ref={(el) => (barsRef.current[i] = el)}
+        >
+          <boxGeometry args={[0.8, 1, 0.8]} />
+          <meshStandardMaterial
+            color="cyan"
+            roughness={0.2}
+            metalness={0.8}
+            emissive="cyan"
+            emissiveIntensity={1.2}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
     </group>
   );
 };
@@ -91,6 +293,9 @@ const AudioVisualizer = () => {
   const [inputMode, setInputMode] = useState('file'); // 'file' or 'mic'
   const [fileName, setFileName] = useState(null);
   const [isMicActive, setIsMicActive] = useState(false);
+
+  // New State: Visualizer Mode
+  const [visualizerMode, setVisualizerMode] = useState('bars'); // 'bars', 'sphere', 'wave'
 
   const audioContextRef = useRef(null);
   const audioElementRef = useRef(null);
@@ -234,8 +439,8 @@ const AudioVisualizer = () => {
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-8">
 
         {/* Header */}
-        <header className="flex justify-between items-start pointer-events-auto">
-          <div className="flex items-center gap-3">
+        <header className="flex flex-col items-center md:flex-row md:justify-between gap-4 md:gap-6 pointer-events-auto w-full">
+          <div className="flex items-center gap-3 self-start md:self-auto">
             <div className={`w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-600 ${isPlaying || isMicActive ? 'animate-pulse' : ''}`} />
             <div>
               <h1 className="text-xl font-bold tracking-tight">SONIC WAVES</h1>
@@ -243,15 +448,31 @@ const AudioVisualizer = () => {
             </div>
           </div>
 
+          {/* Visualizer Selector */}
+          <div className="flex flex-wrap justify-center gap-2 bg-white/5 backdrop-blur-md rounded-2xl p-1.5 border border-white/10 w-full md:w-auto">
+            {['bars', 'linear', 'sphere', 'wave'].map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setVisualizerMode(mode)}
+                className={`flex-1 md:flex-none px-3 py-1.5 rounded-xl text-[10px] md:text-xs font-bold uppercase tracking-widest transition-all ${visualizerMode === mode
+                  ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20'
+                  : 'text-white/60 hover:text-white hover:bg-white/10'
+                  }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+
           {/* Input Controls */}
-          <div className="flex gap-4">
+          <div className="flex gap-3 w-full md:w-auto">
             {/* Upload Button */}
             <button
               onClick={() => fileInputRef.current?.click()}
               className="px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 backdrop-blur-md transition-all text-sm font-medium flex items-center gap-2"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-              Upload File
+              Upload
             </button>
             <input
               ref={fileInputRef}
@@ -267,19 +488,19 @@ const AudioVisualizer = () => {
               className={`px-5 py-2 rounded-full border backdrop-blur-md transition-all text-sm font-medium flex items-center gap-2 ${isMicActive ? 'bg-red-500/20 border-red-500 text-red-300' : 'bg-white/10 hover:bg-white/20 border-white/10'}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
-              {isMicActive ? 'Mic Active' : 'Use Mic'}
+              {isMicActive ? 'Active' : 'Mic'}
             </button>
           </div>
         </header>
 
         {/* Center Welcome Message */}
         {!analyzer && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-auto">
-            <h2 className="text-5xl md:text-7xl font-light tracking-tighter mb-6 bg-gradient-to-b from-white to-white/20 bg-clip-text text-transparent">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-auto w-full px-4">
+            <h2 className="text-4xl md:text-7xl font-light tracking-tighter mb-4 md:mb-6 bg-gradient-to-b from-white to-white/20 bg-clip-text text-transparent">
               Feel the <br /> <span className="font-bold">Music</span>
             </h2>
             <p className="text-lg text-white/40 mb-8 max-w-md mx-auto">
-              Play music from a file or use your microphone to generate <br /> a real-time 3D audio landscape.
+              Select a visualizer style and play music to start the experience.
             </p>
           </div>
         )}
@@ -305,7 +526,10 @@ const AudioVisualizer = () => {
               <div className="flex justify-between items-end mb-2">
                 <div className="truncate pr-4">
                   <h3 className="text-white font-medium truncate">{fileName || "Unknown Track"}</h3>
-                  <p className="text-xs text-cyan-400">{isMicActive ? 'Live Input' : 'Now Playing'}</p>
+                  <p className="text-xs text-cyan-400 flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                    {isMicActive ? 'Live Input' : 'Now Playing'} • {visualizerMode.toUpperCase()} Mode
+                  </p>
                 </div>
                 {!isMicActive && (
                   <div className="text-xs font-mono text-white/50 shrink-0">
@@ -346,6 +570,12 @@ const AudioVisualizer = () => {
       {/* --- 3D Scene --- */}
       <div className="absolute inset-0 z-0">
         <Canvas camera={{ position: [0, 20, 35], fov: 45 }}>
+          <ResponsiveCamera />
+
+          <EffectComposer>
+            <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} intensity={1.0} radius={0.8} />
+          </EffectComposer>
+
           <color attach="background" args={['#050510']} />
           <fog attach="fog" args={['#050510', 20, 80]} />
 
@@ -355,7 +585,14 @@ const AudioVisualizer = () => {
 
           <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1.5} />
 
-          {analyzer && <FrequencyBars analyzer={analyzer} />}
+          {analyzer && (
+            <>
+              {visualizerMode === 'bars' && <BarVisualizer analyzer={analyzer} />}
+              {visualizerMode === 'linear' && <LinearBarVisualizer analyzer={analyzer} />}
+              {visualizerMode === 'sphere' && <SphereVisualizer analyzer={analyzer} />}
+              {visualizerMode === 'wave' && <WaveVisualizer analyzer={analyzer} />}
+            </>
+          )}
 
           {!analyzer && (
             <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
