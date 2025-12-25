@@ -333,6 +333,7 @@ const AudioVisualizer = () => {
   const [inputMode, setInputMode] = useState('file'); // 'file' or 'mic'
   const [fileName, setFileName] = useState(null);
   const [isMicActive, setIsMicActive] = useState(false);
+  const [isSystemActive, setIsSystemActive] = useState(false);
 
   // New State: Visualizer Mode
   const [visualizerMode, setVisualizerMode] = useState('bars'); // 'bars', 'sphere', 'wave'
@@ -346,6 +347,7 @@ const AudioVisualizer = () => {
   const cleanupAudio = () => {
     setIsPlaying(false);
     setIsMicActive(false);
+    setIsSystemActive(false);
 
     // Stop File Audio
     if (audioElementRef.current) {
@@ -444,12 +446,53 @@ const AudioVisualizer = () => {
     }
   };
 
+  // --- Handle System Audio (Screen Share) ---
+  const handleSystemAudio = async () => {
+    try {
+      cleanupAudio();
+
+      // Request screen share with audio
+      // 'video: true' is required for getDisplayMedia to work at all
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true
+      });
+
+      // Validations
+      if (stream.getAudioTracks().length === 0) {
+        alert("No audio shared! Please check the 'Share system audio' box in the browser window.");
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
+      setFileName("System Audio (Screen Share)");
+      setInputMode('system');
+      setIsSystemActive(true);
+      mediaStreamRef.current = stream;
+
+      const { audioCtx, newAnalyzer } = initAudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(newAnalyzer);
+
+      // Handle "Stop Sharing" button in browser UI
+      stream.getVideoTracks()[0].onended = () => {
+        cleanupAudio();
+        // Reset to default
+        setFileName(null);
+      };
+
+    } catch (err) {
+      console.error("System audio cancelled or denied:", err);
+    }
+  };
+
   // --- Controls ---
   const togglePlay = () => {
-    if (inputMode === 'mic') {
-      // Toggle mic on/off by re-running or cleaning up
-      if (isMicActive) cleanupAudio();
-      else handleMicInput();
+    if (inputMode === 'mic' || inputMode === 'system') {
+      // Toggle off by cleaning up
+      if (isMicActive || isSystemActive) cleanupAudio();
+      else if (inputMode === 'mic') handleMicInput();
+      else handleSystemAudio();
       return;
     }
 
@@ -465,7 +508,7 @@ const AudioVisualizer = () => {
   };
 
   const handleSeek = (e) => {
-    if (inputMode === 'mic') return;
+    if (inputMode === 'mic' || inputMode === 'system') return;
     const newTime = Number(e.target.value);
     if (!audioElementRef.current) return;
     audioElementRef.current.currentTime = newTime;
@@ -481,7 +524,7 @@ const AudioVisualizer = () => {
         {/* Header */}
         <header className="flex flex-col items-center md:flex-row md:justify-between gap-4 md:gap-6 pointer-events-auto w-full">
           <div className="flex items-center gap-3 self-start md:self-auto">
-            <div className={`w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-600 ${isPlaying || isMicActive ? 'animate-pulse' : ''}`} />
+            <div className={`w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-600 ${isPlaying || isMicActive || isSystemActive ? 'animate-pulse' : ''}`} />
             <div>
               <h1 className="text-xl font-bold tracking-tight">SONIC WAVES</h1>
               <p className="text-xs text-white/50 tracking-wider uppercase">Audio Environment</p>
@@ -530,6 +573,15 @@ const AudioVisualizer = () => {
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
               {isMicActive ? 'Active' : 'Mic'}
             </button>
+
+            {/* System Audio Button */}
+            <button
+              onClick={handleSystemAudio}
+              className={`px-5 py-2 rounded-full border backdrop-blur-md transition-all text-sm font-medium flex items-center gap-2 ${isSystemActive ? 'bg-purple-500/20 border-purple-500 text-purple-300' : 'bg-white/10 hover:bg-white/20 border-white/10'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
+              {isSystemActive ? 'Active' : 'System'}
+            </button>
           </div>
         </header>
 
@@ -552,9 +604,9 @@ const AudioVisualizer = () => {
             {/* Play/Stop Button */}
             <button
               onClick={togglePlay}
-              className={`w-12 h-12 flex-shrink-0 rounded-full flex items-center justify-center text-black hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] ${isMicActive ? 'bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}
+              className={`w-12 h-12 flex-shrink-0 rounded-full flex items-center justify-center text-black hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] ${isMicActive ? 'bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]' : isSystemActive ? 'bg-purple-500 shadow-[0_0_20px_rgba(168,85,247,0.4)]' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}
             >
-              {isPlaying || isMicActive ? (
+              {isPlaying || isMicActive || isSystemActive ? (
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
               ) : (
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
@@ -568,10 +620,10 @@ const AudioVisualizer = () => {
                   <h3 className="text-white font-medium truncate">{fileName || "Unknown Track"}</h3>
                   <p className="text-xs text-cyan-400 flex items-center gap-2">
                     <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
-                    {isMicActive ? 'Live Input' : 'Now Playing'} • {visualizerMode.toUpperCase()} Mode
+                    {isMicActive ? 'Live Input' : isSystemActive ? 'System Capture' : 'Now Playing'} • {visualizerMode.toUpperCase()} Mode
                   </p>
                 </div>
-                {!isMicActive && (
+                {!isMicActive && !isSystemActive && (
                   <div className="text-xs font-mono text-white/50 shrink-0">
                     {formatTime(currentTime)} / {formatTime(duration)}
                   </div>
@@ -579,7 +631,7 @@ const AudioVisualizer = () => {
               </div>
 
               {/* Seeker (Only for Files) */}
-              {!isMicActive ? (
+              {!isMicActive && !isSystemActive ? (
                 <div className="relative h-1.5 bg-white/10 rounded-full group cursor-pointer">
                   <input
                     type="range"
@@ -597,7 +649,7 @@ const AudioVisualizer = () => {
               ) : (
                 // Mic Visualizer Line
                 <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden relative">
-                  <div className="absolute inset-0 bg-red-500/50 animate-pulse" style={{ width: '100%' }} />
+                  <div className={`absolute inset-0 animate-pulse ${isSystemActive ? 'bg-purple-500/50' : 'bg-red-500/50'}`} style={{ width: '100%' }} />
                 </div>
               )}
             </div>
@@ -653,7 +705,7 @@ const AudioVisualizer = () => {
             enableZoom={false}
             maxPolarAngle={Math.PI / 2}
             minPolarAngle={Math.PI / 3}
-            autoRotate={!isPlaying && !isMicActive}
+            autoRotate={!isPlaying && !isMicActive && !isSystemActive}
             autoRotateSpeed={0.5}
           />
         </Canvas>
