@@ -448,6 +448,12 @@ const AudioVisualizer = () => {
 
   // --- Handle System Audio (Screen Share) ---
   const handleSystemAudio = async () => {
+    // Explicit disclaimer to ensure user understands the requirement
+    const proceed = window.confirm(
+      "To visualize system audio, you must share your screen or tab.\n\n⚠️ IMPORTANT: You MUST check the 'Share system audio' box in the browser popup, otherwise no sound will be detected.\n\nClick OK to proceed."
+    );
+    if (!proceed) return;
+
     try {
       cleanupAudio();
 
