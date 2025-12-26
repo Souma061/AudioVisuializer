@@ -1,16 +1,34 @@
 @import "tailwindcss";
-/* Force the extension popup to be a good size */
+/* ============================================================
+   MODE 1: WEBSITE DEVELOPMENT (Default)
+   Use this when running 'npm run dev' on localhost.
+   It makes the app full screen.
+   ============================================================ */
 html, body {
-    width: 450px;      /* Force width */
-    height: 600px;     /* Force height */
+    width: 100%;       /* Full width */
+    height: 100%;      /* Full height */
     margin: 0;
     padding: 0;
-    overflow: hidden;  /* Hide ugly scrollbars */
+    overflow: hidden;
     background-color: #050510;
 }
+
+/* ============================================================
+   MODE 2: CHROME EXTENSION (Build)
+   UNCOMMENT this block (and comment out Mode 1) before running
+   'npm run build' to make the popup the correct size.
+   ============================================================ */
+/* html, body {
+    width: 450px;
+    height: 600px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #050510;
+}
+*/
 
 #root {
     width: 100%;
     height: 100%;
 }
-
