@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "3D Audio Visualizer",
+  "version": "1.0",
+  "description": "Real-time 3D audio visualization in your browser.",
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Open Visualizer"
+  },
+  "icons": {
+    "192": "pwa-192x192.png",
+    "512": "pwa-512x512.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ]
+}

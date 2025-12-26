@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/* Force the extension popup to be a good size */
+body, html {
+  width: 400px;  /* Good width for a popup */
+  height: 600px; /* Max height allowing in Chrome */
+  margin: 0;
+  padding: 0;
+  overflow: hidden; 
+}
 
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
