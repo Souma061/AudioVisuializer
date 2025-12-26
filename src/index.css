@@ -1,31 +1,16 @@
 @import "tailwindcss";
 /* Force the extension popup to be a good size */
-body, html {
-  width: 400px;  /* Good width for a popup */
-  height: 600px; /* Max height allowing in Chrome */
-  margin: 0;
-  padding: 0;
-  overflow: hidden; 
-}
-
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: dark;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background-color: #050510;
+html, body {
+    width: 450px;      /* Force width */
+    height: 600px;     /* Force height */
+    margin: 0;
+    padding: 0;
+    overflow: hidden;  /* Hide ugly scrollbars */
+    background-color: #050510;
 }
 
 #root {
-  width: 100%;
-  height: 100%;
+    width: 100%;
+    height: 100%;
 }
+
